@@ -372,11 +372,16 @@ body {
     font-size: 12px;
     text-transform: uppercase;
     color: #8e9297;
-    margin-bottom: 16px;
+    margin: 16px 0 8px 0;
     letter-spacing: 0.5px;
 }
 
 #users-list {
+    display: flex;
+    flex-direction: column;
+}
+
+#voice-users-list {
     display: flex;
     flex-direction: column;
 }
@@ -409,6 +414,27 @@ body {
 
 .user-status.offline {
     background-color: #747f8d;
+}
+
+.user-status.talking {
+    background-color: #57f287;
+    box-shadow: 0 0 8px #57f287;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 rgba(87, 242, 135, 0.7);
+    }
+    70% {
+        transform: scale(1.1);
+        box-shadow: 0 0 0 8px rgba(87, 242, 135, 0);
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 rgba(87, 242, 135, 0);
+    }
 }
 
 .user-name {
