@@ -172,6 +172,14 @@ socket.on('webrtcIceCandidate', (data) => {
 
 // WebRTC helper functions
 function createPeerConnection(userId, username) {
+    // Проверяем, существует ли уже соединение с этим пользователем
+    if (peerConnections.has(userId)) {
+        console.warn('Peer connection already exists for user:', userId);
+        const existingPc = peerConnections.get(userId);
+        existingPc.close();
+        peerConnections.delete(userId);
+    }
+    
     const pc = new RTCPeerConnection({
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' }
@@ -215,12 +223,23 @@ function createPeerConnection(userId, username) {
                 targetUserId: userId,
                 offer: pc.localDescription
             });
+        })
+        .catch(err => {
+            console.error('Error creating offer:', err);
         });
     
     peerConnections.set(userId, pc);
 }
 
 function handleIncomingOffer(offer, senderId, username) {
+    // Проверяем, существует ли уже соединение с этим пользователем
+    if (peerConnections.has(senderId)) {
+        console.warn('Peer connection already exists for user:', senderId);
+        const existingPc = peerConnections.get(senderId);
+        existingPc.close();
+        peerConnections.delete(senderId);
+    }
+    
     const pc = new RTCPeerConnection({
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' }
@@ -266,6 +285,9 @@ function handleIncomingOffer(offer, senderId, username) {
                 targetUserId: senderId,
                 answer: pc.localDescription
             });
+        })
+        .catch(err => {
+            console.error('Error handling incoming offer:', err);
         });
     
     peerConnections.set(senderId, pc);
@@ -274,13 +296,27 @@ function handleIncomingOffer(offer, senderId, username) {
 function handleIncomingAnswer(answer, senderId) {
     const pc = peerConnections.get(senderId);
     if (pc) {
-        pc.setRemoteDescription(answer);
+        // Проверяем, что соединение находится в нужном состоянии перед установкой remote description
+        if (pc.signalingState === 'have-local-offer') {
+            pc.setRemoteDescription(answer)
+                .then(() => {
+                    console.log('Remote description set successfully');
+                })
+                .catch(err => {
+                    console.error('Error setting remote description:', err);
+                });
+        } else {
+            console.warn('Peer connection not in correct state for answer:', pc.signalingState);
+        }
     }
 }
 
 function handleIncomingIceCandidate(candidate, senderId) {
     const pc = peerConnections.get(senderId);
     if (pc) {
-        pc.addIceCandidate(candidate);
+        pc.addIceCandidate(candidate)
+            .catch(err => {
+                console.error('Error adding received ice candidate:', err);
+            });
     }
 }
