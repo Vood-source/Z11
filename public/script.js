@@ -14,12 +14,15 @@ const onlineCount = document.getElementById('online-count');
 const voiceStatus = document.getElementById('voice-status');
 const micBtn = document.getElementById('mic-btn');
 const leaveVoiceBtn = document.getElementById('leave-voice-btn');
+const voiceUsersList = document.getElementById('voice-users-list');
+const voiceChannelName = document.getElementById('voice-channel-name');
 
 // User state
 let currentUser = null;
 let currentVoiceChannel = null;
 let localStream = null;
 let peerConnections = new Map();
+const voiceUsers = new Map(); // Store voice channel users
 
 // Join chat
 joinBtn.addEventListener('click', () => {
@@ -83,6 +86,11 @@ socket.on('userJoined', (user) => {
 
 socket.on('userDisconnected', (user) => {
     // User list will be updated via userList event
+    // Remove user from voice users list if they were in voice channel
+    if (voiceUsers.has(user.id)) {
+        voiceUsers.delete(user.id);
+        updateVoiceUsersList();
+    }
 });
 
 // Voice channel functionality
@@ -105,6 +113,7 @@ function joinVoiceChannel(channelName) {
             
             // Update UI
             currentVoiceChannel = channelName;
+            voiceChannelName.textContent = channelName;
             voiceStatus.innerHTML = `
                 <span class="status-indicator connected"></span>
                 <span class="status-text">In ${channelName}</span>
@@ -131,8 +140,16 @@ function leaveVoiceChannel() {
     });
     peerConnections.clear();
     
+    // Stop all voice activity monitoring
+    voiceActivityMonitors.clear();
+    
+    // Clear voice users list
+    voiceUsers.clear();
+    updateVoiceUsersList();
+    
     // Update UI
     currentVoiceChannel = null;
+    voiceChannelName.textContent = 'None';
     voiceStatus.innerHTML = `
         <span class="status-indicator"></span>
         <span class="status-text">Not in voice channel</span>
@@ -143,11 +160,22 @@ leaveVoiceBtn.addEventListener('click', leaveVoiceChannel);
 
 // WebRTC functionality
 socket.on('userJoinedVoice', (data) => {
+    // Add user to voice users list
+    voiceUsers.set(data.userId, { id: data.userId, username: data.username, talking: false });
+    updateVoiceUsersList();
+    
     // Create peer connection when someone joins the voice channel
     createPeerConnection(data.userId, data.username);
 });
 
 socket.on('userLeftVoice', (data) => {
+    // Remove user from voice users list
+    voiceUsers.delete(data.userId);
+    updateVoiceUsersList();
+    
+    // Stop voice activity monitoring for this user
+    stopVoiceActivityMonitoring(data.userId);
+    
     // Close peer connection when someone leaves the voice channel
     if (peerConnections.has(data.userId)) {
         peerConnections.get(data.userId).close();
@@ -169,6 +197,162 @@ socket.on('webrtcIceCandidate', (data) => {
     // Handle incoming ICE candidate
     handleIncomingIceCandidate(data.candidate, data.senderId);
 });
+
+// Audio context for voice activity detection
+let audioContext = null;
+let voiceActivityMonitors = new Map(); // Track voice activity for each user
+
+// Function to update voice users list in UI
+function updateVoiceUsersList() {
+    voiceUsersList.innerHTML = '';
+    
+    voiceUsers.forEach(user => {
+        const userElement = document.createElement('div');
+        userElement.classList.add('user-item');
+        userElement.setAttribute('data-user-id', user.id);
+        userElement.innerHTML = `
+            <div class="user-status ${user.talking ? 'talking' : 'online'}"></div>
+            <div class="user-name">${user.username}</div>
+        `;
+        voiceUsersList.appendChild(userElement);
+    });
+}
+
+// Function to start monitoring voice activity for a user
+function startVoiceActivityMonitoring(stream, userId) {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    
+    // Create audio source and analyzer
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyzer = audioContext.createAnalyser();
+    analyzer.fftSize = 256;
+    
+    source.connect(analyzer);
+    
+    // Store the analyzer for this user
+    voiceActivityMonitors.set(userId, analyzer);
+    
+    // Start monitoring
+    monitorVoiceActivity(userId);
+}
+
+// Function to update voice indicators in the UI
+function updateVoiceIndicator(userId, isActive) {
+    const userElements = document.querySelectorAll(`.user-item[data-user-id="${userId}"]`);
+    userElements.forEach(element => {
+        const statusElement = element.querySelector('.user-status');
+        if (statusElement) {
+            statusElement.classList.toggle('talking', isActive);
+            statusElement.title = isActive ? 'Currently talking' : 'Online';
+        }
+    });
+}
+
+// Event handler for when a user joins a voice channel
+socket.on('userJoinedVoice', (data) => {
+    // Add user to voice users list
+    voiceUsers.set(data.userId, {
+        id: data.userId,
+        username: data.username,
+        talking: false
+    });
+    updateVoiceUsersList();
+    
+    // Create peer connection for the new user
+    createPeerConnection(data.userId, data.username);
+});
+
+// Event handler for when a user leaves a voice channel
+socket.on('userLeftVoice', (data) => {
+    // Remove user from voice users list
+    voiceUsers.delete(data.userId);
+    updateVoiceUsersList();
+    
+    // Stop voice activity monitoring for this user
+    stopVoiceActivityMonitoring(data.userId);
+    
+    // Close peer connection for this user
+    if (peerConnections.has(data.userId)) {
+        const pc = peerConnections.get(data.userId);
+        pc.close();
+        peerConnections.delete(data.userId);
+    }
+});
+
+// Event handler for voice user list updates
+socket.on('voiceUserList', (data) => {
+    // Clear current voice users list
+    voiceUsers.clear();
+    
+    // Add all users from the voice channel
+    data.users.forEach(user => {
+        voiceUsers.set(user.id, {
+            id: user.id,
+            username: user.username,
+            talking: false
+        });
+    });
+    
+    updateVoiceUsersList();
+});
+
+// Function to update voice indicators in the UI
+function updateVoiceIndicator(userId, isActive) {
+    const userElements = document.querySelectorAll(`.user-item[data-user-id="${userId}"]`);
+    userElements.forEach(element => {
+        const statusElement = element.querySelector('.user-status');
+        if (statusElement) {
+            statusElement.classList.toggle('talking', isActive);
+        }
+    });
+}
+
+// Function to monitor voice activity for a specific user
+function monitorVoiceActivity(userId) {
+    const analyzer = voiceActivityMonitors.get(userId);
+    if (!analyzer) return;
+    
+    const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+    
+    function checkVoiceActivity() {
+        if (!voiceActivityMonitors.has(userId)) {
+            return; // Stop if user is no longer in voice channel
+        }
+        
+        analyzer.getByteFrequencyData(dataArray);
+        
+        // Calculate average volume
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+        }
+        const average = sum / dataArray.length;
+        
+        // Determine if user is talking based on volume threshold
+        const isTalking = average > 20; // Adjust threshold as needed
+        
+        // Update user's talking status if changed
+        if (voiceUsers.has(userId)) {
+            const user = voiceUsers.get(userId);
+            if (user.talking !== isTalking) {
+                user.talking = isTalking;
+                updateVoiceIndicator(userId, isTalking);
+            }
+        }
+        
+        // Continue monitoring
+        requestAnimationFrame(checkVoiceActivity);
+    }
+    
+    checkVoiceActivity();
+}
+
+// Function to stop monitoring voice activity for a user
+function stopVoiceActivityMonitoring(userId) {
+    voiceActivityMonitors.delete(userId);
+}
 
 // WebRTC helper functions
 function createPeerConnection(userId, username) {
@@ -201,6 +385,19 @@ function createPeerConnection(userId, username) {
         audio.autoplay = true;
         audio.playsInline = true;
         document.body.appendChild(audio);
+        
+        // Start monitoring voice activity for this user
+        startVoiceActivityMonitoring(event.streams[0], senderId);
+        
+        // Add to voice users list if not already present
+        if (!voiceUsers.has(senderId)) {
+            voiceUsers.set(senderId, {
+                id: senderId,
+                username: username,
+                talking: false
+            });
+            updateVoiceUsersList();
+        }
     };
     
     // Handle ICE candidates
@@ -232,12 +429,15 @@ function createPeerConnection(userId, username) {
 }
 
 function handleIncomingOffer(offer, senderId, username) {
-    // Проверяем, существует ли уже соединение с этим пользователем
+    // Check if we already have a connection with this user
     if (peerConnections.has(senderId)) {
         console.warn('Peer connection already exists for user:', senderId);
         const existingPc = peerConnections.get(senderId);
         existingPc.close();
         peerConnections.delete(senderId);
+        
+        // Also remove from voice activity monitoring
+        stopVoiceActivityMonitoring(senderId);
     }
     
     const pc = new RTCPeerConnection({
@@ -261,6 +461,9 @@ function handleIncomingOffer(offer, senderId, username) {
         audio.autoplay = true;
         audio.playsInline = true;
         document.body.appendChild(audio);
+        
+        // Start monitoring voice activity for this user
+        startVoiceActivityMonitoring(event.streams[0], senderId);
     };
     
     // Handle ICE candidates
@@ -291,6 +494,16 @@ function handleIncomingOffer(offer, senderId, username) {
         });
     
     peerConnections.set(senderId, pc);
+    
+    // Add user to voice users list if not already present
+    if (!voiceUsers.has(senderId)) {
+        voiceUsers.set(senderId, {
+            id: senderId,
+            username: username,
+            talking: false
+        });
+        updateVoiceUsersList();
+    }
 }
 
 function handleIncomingAnswer(answer, senderId) {

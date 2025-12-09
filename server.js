@@ -14,6 +14,24 @@ app.use(express.static(path.join(__dirname, 'public')));
 const users = new Map();
 const voiceChannels = new Map();
 
+// Helper function to get user by socket ID
+function getUserById(socketId) {
+  return users.get(socketId);
+}
+
+// Helper function to notify voice channel members
+function notifyVoiceChannelMembers(channelName, event, data) {
+  if (voiceChannels.has(channelName)) {
+    const channelUsers = voiceChannels.get(channelName);
+    for (const userId of channelUsers) {
+      const userSocket = io.sockets.sockets.get(userId);
+      if (userSocket && userId !== data.senderId) { // Don't send back to sender
+        userSocket.emit(event, data);
+      }
+    }
+  }
+}
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
@@ -35,7 +53,25 @@ io.on('connection', (socket) => {
 
   // Handle voice channel creation/joining
   socket.on('joinVoiceChannel', (channelName) => {
-    // Add user to voice channel
+    // Remove user from any existing voice channel
+    for (const [existingChannel, channelUsers] of voiceChannels) {
+      if (channelUsers.has(socket.id)) {
+        channelUsers.delete(socket.id);
+        // Notify others that user left
+        socket.to(existingChannel).emit('userLeftVoice', {
+          userId: socket.id,
+          username: users.get(socket.id)?.username
+        });
+        
+        // Remove channel if empty
+        if (channelUsers.size === 0) {
+          voiceChannels.delete(existingChannel);
+        }
+        break;
+      }
+    }
+    
+    // Add user to requested voice channel
     if (!voiceChannels.has(channelName)) {
       voiceChannels.set(channelName, new Set());
     }
@@ -44,7 +80,8 @@ io.on('connection', (socket) => {
     // Notify others in the channel
     socket.to(channelName).emit('userJoinedVoice', {
       userId: socket.id,
-      username: users.get(socket.id)?.username
+      username: users.get(socket.id)?.username,
+      senderId: socket.id
     });
     
     socket.join(channelName);
@@ -52,11 +89,28 @@ io.on('connection', (socket) => {
 
   // Handle WebRTC offer
   socket.on('webrtcOffer', (data) => {
-    socket.to(data.targetUserId).emit('webrtcOffer', {
-      offer: data.offer,
-      senderId: socket.id,
-      username: users.get(socket.id)?.username
-    });
+    const targetSocket = io.sockets.sockets.get(data.targetUserId);
+    if (targetSocket) {
+      // Verify both users are in the same voice channel
+      let userInSameChannel = false;
+      for (const [channelName, channelUsers] of voiceChannels) {
+        if (channelUsers.has(socket.id) && channelUsers.has(data.targetUserId)) {
+          userInSameChannel = true;
+          break;
+        }
+      }
+      
+      if (userInSameChannel) {
+        targetSocket.emit('webrtcOffer', {
+          offer: data.offer,
+          senderId: socket.id,
+          username: users.get(socket.id)?.username
+        });
+      } else {
+        // User is not in same voice channel, deny connection
+        socket.emit('error', { message: 'Cannot establish connection with user not in same voice channel' });
+      }
+    }
   });
 
   // Handle WebRTC answer
@@ -77,26 +131,41 @@ io.on('connection', (socket) => {
 
   // Handle user disconnect
   socket.on('disconnect', () => {
-    const user = users.get(socket.id);
-    if (user) {
-      users.delete(socket.id);
-      io.emit('userDisconnected', { id: socket.id, username: user.username });
-      io.emit('userList', Array.from(users.values()));
-
-      // Remove user from any voice channels
-      for (const [channelName, channelUsers] of voiceChannels) {
-        if (channelUsers.has(socket.id)) {
-          channelUsers.delete(socket.id);
-          socket.to(channelName).emit('userLeftVoice', { userId: socket.id });
-          
-          // Remove channel if empty
-          if (channelUsers.size === 0) {
-            voiceChannels.delete(channelName);
+      const user = users.get(socket.id);
+      if (user) {
+          // Remove user from voice channels
+          for (const [channelName, channelUsers] of voiceChannels) {
+              if (channelUsers.has(socket.id)) {
+                  channelUsers.delete(socket.id);
+                  
+                  // Notify others in the channel
+                  socket.to(channelName).emit('userLeftVoice', {
+                      userId: socket.id,
+                      username: user.username
+                  });
+                  
+                  // Remove channel if empty
+                  if (channelUsers.size === 0) {
+                      voiceChannels.delete(channelName);
+                  } else {
+                      // Update voice channel user list for remaining users
+                      const remainingUsers = Array.from(channelUsers).map(id => users.get(id)).filter(Boolean);
+                      socket.to(channelName).emit('voiceUserList', {
+                          channelName,
+                          users: remainingUsers
+                      });
+                  }
+              }
           }
-        }
+          
+          // Remove user from global users list
+          users.delete(socket.id);
+          
+          // Notify all clients about disconnection
+          io.emit('userDisconnected', { id: socket.id, username: user.username });
+          io.emit('userList', Array.from(users.values()));
       }
-    }
-    console.log('User disconnected:', socket.id);
+      console.log('User disconnected:', socket.id);
   });
 });
 
