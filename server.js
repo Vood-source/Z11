@@ -1,0 +1,106 @@
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server);
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Store connected users and voice channels
+const users = new Map();
+const voiceChannels = new Map();
+
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  // Handle user joining
+  socket.on('join', (username) => {
+    users.set(socket.id, { id: socket.id, username });
+    socket.broadcast.emit('userJoined', { id: socket.id, username });
+    io.emit('userList', Array.from(users.values()));
+  });
+
+  // Handle chat messages
+  socket.on('chatMessage', (data) => {
+    io.emit('chatMessage', {
+      username: users.get(socket.id)?.username || 'Anonymous',
+      message: data.message,
+      timestamp: new Date()
+    });
+  });
+
+  // Handle voice channel creation/joining
+  socket.on('joinVoiceChannel', (channelName) => {
+    // Add user to voice channel
+    if (!voiceChannels.has(channelName)) {
+      voiceChannels.set(channelName, new Set());
+    }
+    voiceChannels.get(channelName).add(socket.id);
+    
+    // Notify others in the channel
+    socket.to(channelName).emit('userJoinedVoice', {
+      userId: socket.id,
+      username: users.get(socket.id)?.username
+    });
+    
+    socket.join(channelName);
+  });
+
+  // Handle WebRTC offer
+  socket.on('webrtcOffer', (data) => {
+    socket.to(data.targetUserId).emit('webrtcOffer', {
+      offer: data.offer,
+      senderId: socket.id,
+      username: users.get(socket.id)?.username
+    });
+  });
+
+  // Handle WebRTC answer
+  socket.on('webrtcAnswer', (data) => {
+    socket.to(data.targetUserId).emit('webrtcAnswer', {
+      answer: data.answer,
+      senderId: socket.id
+    });
+  });
+
+  // Handle ICE candidates
+  socket.on('webrtcIceCandidate', (data) => {
+    socket.to(data.targetUserId).emit('webrtcIceCandidate', {
+      candidate: data.candidate,
+      senderId: socket.id
+    });
+  });
+
+  // Handle user disconnect
+  socket.on('disconnect', () => {
+    const user = users.get(socket.id);
+    if (user) {
+      users.delete(socket.id);
+      io.emit('userDisconnected', { id: socket.id, username: user.username });
+      io.emit('userList', Array.from(users.values()));
+
+      // Remove user from any voice channels
+      for (const [channelName, channelUsers] of voiceChannels) {
+        if (channelUsers.has(socket.id)) {
+          channelUsers.delete(socket.id);
+          socket.to(channelName).emit('userLeftVoice', { userId: socket.id });
+          
+          // Remove channel if empty
+          if (channelUsers.size === 0) {
+            voiceChannels.delete(channelName);
+          }
+        }
+      }
+    }
+    console.log('User disconnected:', socket.id);
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

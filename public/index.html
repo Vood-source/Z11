@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Clone</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Login Screen -->
+        <div id="login-screen" class="screen">
+            <h1>Join Discord Clone</h1>
+            <input type="text" id="username-input" placeholder="Enter your username" maxlength="20">
+            <button id="join-btn">Join Chat</button>
+        </div>
+
+        <!-- Main App -->
+        <div id="main-app" class="screen hidden">
+            <div class="sidebar">
+                <div class="server-list">
+                    <div class="server-icon active">#</div>
+                    <div class="server-icon">friends</div>
+                </div>
+
+                <div class="channels">
+                    <h3>TEXT CHANNELS</h3>
+                    <div class="channel active"># general</div>
+                    <div class="channel"># random</div>
+
+                    <h3>VOICE CHANNELS</h3>
+                    <div class="voice-channel" data-channel="General Voice">
+                        <span class="voice-icon">🔊</span> General Voice
+                    </div>
+                    <div class="voice-channel" data-channel="Music Room">
+                        <span class="voice-icon">🎵</span> Music Room
+                    </div>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <div class="chat-header">
+                    <span># general</span>
+                </div>
+
+                <div class="chat-messages" id="chat-messages">
+                    <!-- Messages will appear here -->
+                </div>
+
+                <div class="chat-input-container">
+                    <input type="text" id="message-input" placeholder="Message #general">
+                    <button id="send-btn">Send</button>
+                </div>
+            </div>
+
+            <div class="voice-panel">
+                <div class="voice-status" id="voice-status">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">Not in voice channel</span>
+                </div>
+
+                <div class="voice-controls">
+                    <button id="mic-btn" class="control-btn">🎤</button>
+                    <button id="leave-voice-btn" class="control-btn">Exit Voice</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Users Online Panel -->
+    <div class="users-panel">
+        <h3>ONLINE — <span id="online-count">0</span></h3>
+        <div id="users-list">
+            <!-- User list will appear here -->
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
