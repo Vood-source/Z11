@@ -89,7 +89,7 @@ socket.on('userDisconnected', (user) => {
     // Remove user from voice users list if they were in voice channel
     if (voiceUsers.has(user.id)) {
         voiceUsers.delete(user.id);
-        updateVoiceUsersList();
+        removeUserFromVoiceChannelDisplay(user.id);
     }
 });
 
@@ -145,11 +145,13 @@ function leaveVoiceChannel() {
     
     // Clear voice users list
     voiceUsers.clear();
-    updateVoiceUsersList();
+    voiceUsersList.innerHTML = '';
+    
+    // Update voice channel name display
+    voiceChannelName.textContent = 'None';
     
     // Update UI
     currentVoiceChannel = null;
-    voiceChannelName.textContent = 'None';
     voiceStatus.innerHTML = `
         <span class="status-indicator"></span>
         <span class="status-text">Not in voice channel</span>
@@ -161,24 +163,33 @@ leaveVoiceBtn.addEventListener('click', leaveVoiceChannel);
 // WebRTC functionality
 socket.on('userJoinedVoice', (data) => {
     // Add user to voice users list
-    voiceUsers.set(data.userId, { id: data.userId, username: data.username, talking: false });
-    updateVoiceUsersList();
+    voiceUsers.set(data.userId, { 
+        id: data.userId, 
+        username: data.username, 
+        talking: false 
+    });
     
-    // Create peer connection when someone joins the voice channel
+    // Add user to voice channel display
+    addUserToVoiceChannelDisplay(data.userId, data.username);
+    
+    // Create peer connection for the new user
     createPeerConnection(data.userId, data.username);
 });
 
 socket.on('userLeftVoice', (data) => {
     // Remove user from voice users list
     voiceUsers.delete(data.userId);
-    updateVoiceUsersList();
+    
+    // Remove user from voice channel display
+    removeUserFromVoiceChannelDisplay(data.userId);
     
     // Stop voice activity monitoring for this user
     stopVoiceActivityMonitoring(data.userId);
     
-    // Close peer connection when someone leaves the voice channel
+    // Close peer connection for this user
     if (peerConnections.has(data.userId)) {
-        peerConnections.get(data.userId).close();
+        const pc = peerConnections.get(data.userId);
+        pc.close();
         peerConnections.delete(data.userId);
     }
 });
@@ -207,14 +218,53 @@ function updateVoiceUsersList() {
     voiceUsersList.innerHTML = '';
     
     voiceUsers.forEach(user => {
-        const userElement = document.createElement('div');
-        userElement.classList.add('user-item');
-        userElement.setAttribute('data-user-id', user.id);
-        userElement.innerHTML = `
-            <div class="user-status ${user.talking ? 'talking' : 'online'}"></div>
-            <div class="user-name">${user.username}</div>
-        `;
-        voiceUsersList.appendChild(userElement);
+        addUserToVoiceChannelDisplay(user.id, user.username);
+    });
+}
+
+// Function to add user to voice channel display
+function addUserToVoiceChannelDisplay(userId, username) {
+    // Check if user is already in the display
+    if (document.querySelector(`.user-item[data-user-id="${userId}"]`)) {
+        return; // User already displayed
+    }
+    
+    const userElement = document.createElement('div');
+    userElement.classList.add('user-item');
+    userElement.setAttribute('data-user-id', userId);
+    userElement.innerHTML = `
+        <div class="user-status online"></div>
+        <div class="user-name">${username}</div>
+    `;
+    voiceUsersList.appendChild(userElement);
+}
+
+// Function to remove user from voice channel display
+function removeUserFromVoiceChannelDisplay(userId) {
+    const userElement = document.querySelector(`.user-item[data-user-id="${userId}"]`);
+    if (userElement) {
+        userElement.remove();
+    }
+}
+
+// Function to update voice indicators in the UI
+function updateVoiceIndicator(userId, isActive) {
+    const userElements = document.querySelectorAll(`.user-item[data-user-id="${userId}"]`);
+    userElements.forEach(element => {
+        const statusElement = element.querySelector('.user-status');
+        if (statusElement) {
+            // Remove previous state classes
+            statusElement.classList.remove('online', 'offline', 'talking');
+            
+            // Add appropriate class based on state
+            if (isActive) {
+                statusElement.classList.add('talking');
+                statusElement.title = 'Currently talking';
+            } else {
+                statusElement.classList.add('online');
+                statusElement.title = 'Online';
+            }
+        }
     });
 }
 
@@ -236,77 +286,6 @@ function startVoiceActivityMonitoring(stream, userId) {
     
     // Start monitoring
     monitorVoiceActivity(userId);
-}
-
-// Function to update voice indicators in the UI
-function updateVoiceIndicator(userId, isActive) {
-    const userElements = document.querySelectorAll(`.user-item[data-user-id="${userId}"]`);
-    userElements.forEach(element => {
-        const statusElement = element.querySelector('.user-status');
-        if (statusElement) {
-            statusElement.classList.toggle('talking', isActive);
-            statusElement.title = isActive ? 'Currently talking' : 'Online';
-        }
-    });
-}
-
-// Event handler for when a user joins a voice channel
-socket.on('userJoinedVoice', (data) => {
-    // Add user to voice users list
-    voiceUsers.set(data.userId, {
-        id: data.userId,
-        username: data.username,
-        talking: false
-    });
-    updateVoiceUsersList();
-    
-    // Create peer connection for the new user
-    createPeerConnection(data.userId, data.username);
-});
-
-// Event handler for when a user leaves a voice channel
-socket.on('userLeftVoice', (data) => {
-    // Remove user from voice users list
-    voiceUsers.delete(data.userId);
-    updateVoiceUsersList();
-    
-    // Stop voice activity monitoring for this user
-    stopVoiceActivityMonitoring(data.userId);
-    
-    // Close peer connection for this user
-    if (peerConnections.has(data.userId)) {
-        const pc = peerConnections.get(data.userId);
-        pc.close();
-        peerConnections.delete(data.userId);
-    }
-});
-
-// Event handler for voice user list updates
-socket.on('voiceUserList', (data) => {
-    // Clear current voice users list
-    voiceUsers.clear();
-    
-    // Add all users from the voice channel
-    data.users.forEach(user => {
-        voiceUsers.set(user.id, {
-            id: user.id,
-            username: user.username,
-            talking: false
-        });
-    });
-    
-    updateVoiceUsersList();
-});
-
-// Function to update voice indicators in the UI
-function updateVoiceIndicator(userId, isActive) {
-    const userElements = document.querySelectorAll(`.user-item[data-user-id="${userId}"]`);
-    userElements.forEach(element => {
-        const statusElement = element.querySelector('.user-status');
-        if (statusElement) {
-            statusElement.classList.toggle('talking', isActive);
-        }
-    });
 }
 
 // Function to monitor voice activity for a specific user
@@ -356,12 +335,15 @@ function stopVoiceActivityMonitoring(userId) {
 
 // WebRTC helper functions
 function createPeerConnection(userId, username) {
-    // Проверяем, существует ли уже соединение с этим пользователем
+    // Check if we already have a connection with this user
     if (peerConnections.has(userId)) {
         console.warn('Peer connection already exists for user:', userId);
         const existingPc = peerConnections.get(userId);
         existingPc.close();
         peerConnections.delete(userId);
+        
+        // Also remove from voice activity monitoring
+        stopVoiceActivityMonitoring(userId);
     }
     
     const pc = new RTCPeerConnection({
@@ -387,16 +369,18 @@ function createPeerConnection(userId, username) {
         document.body.appendChild(audio);
         
         // Start monitoring voice activity for this user
-        startVoiceActivityMonitoring(event.streams[0], senderId);
+        startVoiceActivityMonitoring(event.streams[0], userId);
         
         // Add to voice users list if not already present
-        if (!voiceUsers.has(senderId)) {
-            voiceUsers.set(senderId, {
-                id: senderId,
-                username: username,
-                talking: false
+        if (!voiceUsers.has(userId)) {
+            voiceUsers.set(userId, { 
+                id: userId, 
+                username: username, 
+                talking: false 
             });
-            updateVoiceUsersList();
+            
+            // Add user to voice channel display
+            addUserToVoiceChannelDisplay(userId, username);
         }
     };
     
@@ -464,6 +448,18 @@ function handleIncomingOffer(offer, senderId, username) {
         
         // Start monitoring voice activity for this user
         startVoiceActivityMonitoring(event.streams[0], senderId);
+        
+        // Add to voice users list if not already present
+        if (!voiceUsers.has(senderId)) {
+            voiceUsers.set(senderId, { 
+                id: senderId, 
+                username: username, 
+                talking: false 
+            });
+            
+            // Add user to voice channel display
+            addUserToVoiceChannelDisplay(senderId, username);
+        }
     };
     
     // Handle ICE candidates
@@ -494,22 +490,12 @@ function handleIncomingOffer(offer, senderId, username) {
         });
     
     peerConnections.set(senderId, pc);
-    
-    // Add user to voice users list if not already present
-    if (!voiceUsers.has(senderId)) {
-        voiceUsers.set(senderId, {
-            id: senderId,
-            username: username,
-            talking: false
-        });
-        updateVoiceUsersList();
-    }
 }
 
 function handleIncomingAnswer(answer, senderId) {
     const pc = peerConnections.get(senderId);
     if (pc) {
-        // Проверяем, что соединение находится в нужном состоянии перед установкой remote description
+        // Check if connection is in the correct state for answer
         if (pc.signalingState === 'have-local-offer') {
             pc.setRemoteDescription(answer)
                 .then(() => {
